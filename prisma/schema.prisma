@@ -1,0 +1,145 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ================== USERS ==================
+
+model User {
+  id            Int            @id @default(autoincrement())
+  name          String
+  email         String         @unique
+  password      String
+  role          String         @default("USER") // ADMIN, MANAGER, USER
+  workspaces    Workspace[]    @relation("WorkspaceCreator")
+  memberships   Membership[]
+  tasks         Task[]         @relation("TaskAssignee")
+  comments      Comment[]
+  notifications Notification[]
+  tokens        RefreshToken[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  Invitation    Invitation[]
+
+  @@map("users") // actual table name = users
+}
+
+// ================== WORKSPACES ==================
+model Workspace {
+  id        Int       @id @default(autoincrement())
+  name      String
+  creatorId Int
+  creator   User      @relation("WorkspaceCreator", fields: [creatorId], references: [id])
+  projects  Project[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("workspaces") // actual table name = workspaces
+}
+
+// ================== PROJECTS ==================
+model Project {
+  id          Int          @id @default(autoincrement())
+  name        String
+  description String?
+  workspaceId Int
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id])
+  memberships Membership[]
+  tasks       Task[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  Invitation  Invitation[]
+
+  @@map("projects")
+}
+
+// ================== MEMBERSHIPS ==================
+model Membership {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  projectId Int
+  role      String   @default("MEMBER") // ADMIN, MEMBER
+  user      User     @relation(fields: [userId], references: [id])
+  project   Project  @relation(fields: [projectId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, projectId])
+  @@map("memberships")
+}
+
+// ================== TASKS ==================
+model Task {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  status      String    @default("TODO") // TODO, IN_PROGRESS, DONE
+  priority    String    @default("MEDIUM") // LOW, MEDIUM, HIGH
+  dueDate     DateTime?
+  projectId   Int
+  assigneeId  Int?
+  project     Project   @relation(fields: [projectId], references: [id])
+  assignee    User?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  comments    Comment[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime? //soft delete
+
+  @@map("tasks") // actual table name = tasks
+}
+
+// ================== COMMENTS ==================
+model Comment {
+  id        Int      @id @default(autoincrement())
+  content   String
+  taskId    Int
+  userId    Int
+  task      Task     @relation(fields: [taskId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@map("comments") // actual table name = comments
+}
+
+// ================== NOTIFICATIONS ==================
+model Notification {
+  id        Int      @id @default(autoincrement())
+  message   String
+  userId    Int
+  read      Boolean  @default(false)
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@map("notifications") // actual table name = notifications
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@map("refresh_tokens") // actual table name = refresh_tokens
+}
+
+model Invitation {
+  id        Int      @id @default(autoincrement())
+  email     String
+  token     String   @unique
+  projectId Int
+  inviterId Int // who created the invite
+  role      String   @default("MEMBER")
+  accepted  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  project Project @relation(fields: [projectId], references: [id])
+  inviter User    @relation(fields: [inviterId], references: [id])
+
+  @@map("invitations")
+}
