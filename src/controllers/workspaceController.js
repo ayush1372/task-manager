@@ -41,7 +41,6 @@ export const workspaceController = {
       const workspace = await workspaceService.getWorkspaceById(workspaceId);
       if (!workspace) return res.status(404).json({ error: "Workspace not found" });
 
-      // Only creator (owner) can update
       if (workspace.creatorId !== Number(userId)) {
         return res.status(403).json({ error: "Not authorized to update workspace" });
       }
@@ -57,20 +56,15 @@ export const workspaceController = {
     try {
       const workspaceId = Number(req.params.id);
       const userId = req.user.userId;
-       
-      
+
       const workspace = await workspaceService.getWorkspaceById(workspaceId);
       if (!workspace) return res.status(404).json({ error: "Workspace not found" });
-
-      
 
       if (workspace.creatorId !== Number(userId)) {
         return res.status(403).json({ error: "Not authorized to delete workspace" });
       }
-       
 
-      await workspaceService.deleteWorkspace( workspaceId );
-     
+      await workspaceService.deleteWorkspace(workspaceId);
 
       return res.json({ message: "Workspace deleted" });
     } catch (err) {

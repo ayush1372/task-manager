@@ -1,66 +1,78 @@
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { supabase } from "../config/supabase.js";
 
 export const workspaceService = {
-  // Creates a workspace and returns it
-  //Also does NOT automatically create memberships (we use project-level memberships).
   createWorkspace: async ({ name, creatorId }) => {
-    return prisma.workspace.create({
-      data: {
-        name,
-        creatorId,
-      },
-    });
+    const { data, error } = await supabase
+      .from('workspaces')
+      .insert([{ name, creatorId }])
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
   },
-
-  /**
-   * Get workspaces where user is either the creator,
-   * or a member of at least one project inside the workspace.
-   */
 
   getUserWorkspaces: async (userId) => {
-    return prisma.workspace.findMany({
-      where: {
-        OR: [
-          { creatorId: userId },
-          {
-            // workspace has projects that have memberships for user
-            projects: {
-              some: {
-                memberships: {
-                  some: { userId },
-                },
-              },
-            },
-          },
-        ],
-      },
-      include: {
-        // include shallow project info (no heavy nested data)
-        projects: { select: { id: true, name: true } },
-      },
-    });
+    // Get workspaces where user is creator or member of a project
+    const { data: created, error: err1 } = await supabase
+      .from('workspaces')
+      .select('*, projects(id, name)')
+      .eq('creatorId', userId);
+
+    const { data: memberships, error: err2 } = await supabase
+      .from('memberships')
+      .select('projectId')
+      .eq('userId', userId);
+
+    const projectIds = memberships?.map(m => m.projectId) || [];
+    const { data: memberWorkspaces, error: err3 } = await supabase
+      .from('projects')
+      .select('workspaceId, id, name')
+      .in('id', projectIds);
+
+    // Merge workspaces
+    const workspaceIds = memberWorkspaces?.map(p => p.workspaceId) || [];
+    const { data: memberWs, error: err4 } = await supabase
+      .from('workspaces')
+      .select('*, projects(id, name)')
+      .in('id', workspaceIds);
+
+    if (err1 || err2 || err3 || err4) throw new Error((err1 || err2 || err3 || err4).message);
+
+    // Combine and deduplicate
+    const all = [...created, ...memberWs].reduce((acc, ws) => {
+      if (!acc.find(w => w.id === ws.id)) acc.push(ws);
+      return acc;
+    }, []);
+    return all;
   },
 
-  getWorkspaceById: async(workspaceId) =>{
-    return prisma.workspace.findUnique({
-        where:{id:workspaceId},
-    })
+  getWorkspaceById: async (workspaceId) => {
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('*')
+      .eq('id', workspaceId)
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
   },
 
-  updateWorkspace: async({workspaceId,name})=>{
-    return prisma.workspace.update({
-        where:{id:Number(workspaceId)},
-        data:{name}
-    });
+  updateWorkspace: async ({ workspaceId, name }) => {
+    const { data, error } = await supabase
+      .from('workspaces')
+      .update({ name })
+      .eq('id', workspaceId)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
   },
 
-  deleteWorkspace: async(workspaceId)=>{
-      
-    return prisma.workspace.delete({
-        where:{id:Number(workspaceId)},
-  });
+  deleteWorkspace: async (workspaceId) => {
+    const { error } = await supabase
+      .from('workspaces')
+      .delete()
+      .eq('id', workspaceId);
+    if (error) throw new Error(error.message);
+    return;
   },
-
 };

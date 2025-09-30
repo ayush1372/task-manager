@@ -3,7 +3,6 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import { PrismaClient } from '@prisma/client';
 import authRoutes from './routes/authRoutes.js';
 import workspaceRoutes from "./routes/workspaceRoutes.js";
 import projectRoutes from "./routes/projectRoutes.js";
@@ -11,12 +10,10 @@ import membershipRoutes from "./routes/membershipRoutes.js";
 import { authorize, authenticate } from './middlewares/authMiddleware.js';
 import invitationRoutes from "./routes/invitationRoutes.js";
 
-
-
 dotenv.config();
+import { supabase } from './config/supabase.js';
 
 const app = express();
-const prisma = new PrismaClient();
 
 // Middlewares
 app.use(express.json());
@@ -26,21 +23,20 @@ app.use(morgan("dev"));
 
 //test route 
 app.get("/",(req,res)=>{
-    res.json({message:"Task Manager API running with PostgreSQL 🚀"});
+    res.json({message:"Task Manager API running with Supabase 🚀"});
 })
 
 //example: get all users
 app.get("/users", async (req, res) => {
   try {
-    const users = await prisma.user.findMany();
+    const { data: users, error } = await supabase.from("users").select("*");
+    if (error) throw error;
     res.json(users);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch users" });
   }
 });
-
-
 
 app.use("/auth", authRoutes);
 
@@ -53,7 +49,12 @@ app.use("/api", invitationRoutes);
 app.get("/", (req, res) => res.json({ message: "Task Manager API" }));
 
 app.get("/users/me", authenticate ,async(req,res)=>{
-     const user =   await prisma.user.findUnique({ where: { id: req.user.userId },});
+     const { data: user, error } = await supabase
+       .from("users")
+       .select("*")
+       .eq("id", req.user.userId)
+       .single();
+     if (error) return res.status(404).json({ error: "User not found" });
      res.status(200).json(user);
 });
 

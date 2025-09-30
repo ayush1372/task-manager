@@ -1,10 +1,7 @@
 import jwt from "jsonwebtoken";
-
 import nodemailer from "nodemailer";
 import bcrypt from "bcryptjs";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { supabase } from "../config/supabase.js";
 
 const INVITE_SECRET = process.env.INVITE_TOKEN_SECRET;
 const INVITE_HOURS = Number(process.env.INVITE_TOKEN_EXPIRY_HOURS || 72);
@@ -20,10 +17,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-/**
- * Generate token payload and save invitation record & email link
- */
-
 export const invitationService = {
   createInvitation: async ({
     projectId,
@@ -32,43 +25,42 @@ export const invitationService = {
     role = "MEMBER",
   }) => {
     // check duplicate pending invitation
-    const existing = await prisma.invitation.findFirst({
-      where: {
-        email,
-        projectId: Number(projectId),
-        accepted: false,
-        expiresAt: { gt: new Date() },
-      },
-    });
-    if (existing)
-      throw new Error("There is already a pending invitation for this email");
+    const { data: existing } = await supabase
+      .from("invitations")
+      .select("*")
+      .eq("email", email)
+      .eq("projectId", Number(projectId))
+      .eq("accepted", false)
+      .gt("expiresAt", new Date())
+      .single();
+    if (existing) throw new Error("There is already a pending invitation for this email");
 
     // create token (JWT) with projectId, email
     const token = jwt.sign(
       { projectId: Number(projectId), email },
       INVITE_SECRET,
-      {
-        expiresIn: `${INVITE_HOURS}h`,
-      }
+      { expiresIn: `${INVITE_HOURS}h` }
     );
 
     const expiresAt = new Date(Date.now() + INVITE_HOURS * 60 * 60 * 1000);
 
-    const invite = await prisma.invitation.create({
-      data: {
+    const { data: invite, error } = await supabase
+      .from("invitations")
+      .insert([{
         email,
         token,
         projectId: Number(projectId),
         inviterId: Number(inviterId),
         role,
         expiresAt,
-      },
-    });
+        accepted: false,
+      }])
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
 
     // send email (fire-and-forget)
-    const inviteLink = `${APP_BASE}/auth/invite/accept?token=${encodeURIComponent(
-      token
-    )}`;
+    const inviteLink = `${APP_BASE}/auth/invite/accept?token=${encodeURIComponent(token)}`;
     const mailOptions = {
       from: process.env.SMTP_USER,
       to: email,
@@ -78,20 +70,12 @@ export const invitationService = {
     };
 
     transporter.sendMail(mailOptions).catch((err) => {
-      // log but do not fail the API (optionally delete invitation if sending fails)
       console.error("Invite email error:", err);
     });
 
     return invite;
   },
 
-  /**
-   * Accept an invitation using token. Two flows:
-   * - If user exists (by email), create membership immediately and mark invitation accepted.
-   * - If user does not exist, return a response indicating the invite is valid and the front-end should call registration endpoint with token.
-   *
-   * When a new user registers with invite token, client should call register-with-invite endpoint below.
-   */
   verifyInviteToken: async ({ token }) => {
     let payload;
     try {
@@ -100,70 +84,70 @@ export const invitationService = {
       throw new Error("Invalid or expired invitation token");
     }
 
-    const invite = await prisma.invitation.findUnique({ where: { token } });
-    if (!invite) throw new Error("Invitation not found");
+    const { data: invite, error } = await supabase
+      .from("invitations")
+      .select("*")
+      .eq("token", token)
+      .single();
+    if (error || !invite) throw new Error("Invitation not found");
     if (invite.accepted) throw new Error("Invitation already accepted");
-    if (invite.expiresAt < new Date()) throw new Error("Invitation expired");
+    if (new Date(invite.expiresAt) < new Date()) throw new Error("Invitation expired");
 
-    const user = await prisma.user.findUnique({
-      where: { email: invite.email },
-    });
+    const { data: user } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", invite.email)
+      .single();
 
-    return { invite, user }; // controller decides next step
+    return { invite, user };
   },
 
-  /**
-   * Accept invitation when user already exists -> creates membership and marks accepted
-   */
-
   acceptInviteForExistingUser: async ({ token, userId }) => {
-    const invite = await prisma.invitation.findUnique({ where: { token } });
-    if (!invite) throw new Error("Invitation not found");
+    const { data: invite, error } = await supabase
+      .from("invitations")
+      .select("*")
+      .eq("token", token)
+      .single();
+    if (error || !invite) throw new Error("Invitation not found");
     if (invite.accepted) throw new Error("Invitation already accepted");
-    if (invite.expiresAt < new Date()) throw new Error("Invitation expired");
+    if (new Date(invite.expiresAt) < new Date()) throw new Error("Invitation expired");
 
-    //create membership
-    const existingMembership = await prisma.membership.findFirst({
-      where: { projectId: invite.projectId, userId: Number(userId) },
-    });
+    // Check membership
+    const { data: existingMembership } = await supabase
+      .from("memberships")
+      .select("*")
+      .eq("projectId", invite.projectId)
+      .eq("userId", Number(userId))
+      .single();
 
     if (existingMembership) {
-      //mark invite accepted and return
-      await prisma.invitation.update({
-        where: { id: invite.id },
-        data: { accepted: true },
-      });
+      await supabase
+        .from("invitations")
+        .update({ accepted: true })
+        .eq("id", invite.id);
       return {
         message: "User already a member, invitation marked accepted",
         membership: existingMembership,
       };
     }
 
-    await prisma.membership.create({
-      data: {
+    await supabase
+      .from("memberships")
+      .insert([{
         projectId: invite.projectId,
         userId: Number(userId),
         role: invite.role,
-      },
-    });
+      }]);
 
-    await prisma.invitation.update({
-      where: { id: invite.id },
-      data: { accepted: true },
-    });
+    await supabase
+      .from("invitations")
+      .update({ accepted: true })
+      .eq("id", invite.id);
 
     return { message: "Invitation accepted, membership created" };
   },
 
-  /**
-   * Register a new user and accept the invitation in an atomic transaction:
-   * - create user
-   * - create membership
-   * - mark invitation accepted
-   */
-
   registerAndAcceptInvite: async ({ token, name, password }) => {
-    //verify token
     let payload;
     try {
       payload = jwt.verify(token, INVITE_SECRET);
@@ -171,57 +155,67 @@ export const invitationService = {
       throw new Error("Invalid or expired invitation token");
     }
 
-    const invite = await prisma.invitation.findUnique({ where: { token } });
-    if (!invite) throw new Error("Invitation not found");
+    const { data: invite, error: invError } = await supabase
+      .from("invitations")
+      .select("*")
+      .eq("token", token)
+      .single();
+    if (invError || !invite) throw new Error("Invitation not found");
     if (invite.accepted) throw new Error("Invitation already accepted");
-    if (invite.expiresAt < new Date()) throw new Error("Invitation expired");
+    if (new Date(invite.expiresAt) < new Date()) throw new Error("Invitation expired");
 
-    // ensure email not already used (race)
-    const existing = await prisma.user.findUnique({
-      where: { email: invite.email },
-    });
+    // ensure email not already used
+    const { data: existing } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", invite.email)
+      .single();
     if (existing) throw new Error("Email already registered");
 
-    // create user + membership + mark invite accepted in transaction
+    // create user
     const hashed = await bcrypt.hash(password, 10);
+    const { data: newUser, error: userError } = await supabase
+      .from("users")
+      .insert([{
+        name,
+        email: invite.email,
+        password: hashed,
+        role: "USER",
+      }])
+      .select()
+      .single();
+    if (userError) throw new Error(userError.message);
 
-    const result = await prisma.$transaction(async (prismaTx) => {
-      const newUser = await prismaTx.user.create({
-        data: {
-          name,
-          email: invite.email,
-          password: hashed,
-          role: "USER",
-        },
-      });
+    // create membership
+    await supabase
+      .from("memberships")
+      .insert([{
+        projectId: invite.projectId,
+        userId: newUser.id,
+        role: invite.role || "MEMBER",
+      }]);
 
-      await prismaTx.membership.create({
-        data: {
-          projectId: invite.projectId,
-          userId: newUser.id,
-          role: invite.role || "MEMBER",
-        },
-      });
+    // mark invite accepted
+    await supabase
+      .from("invitations")
+      .update({ accepted: true })
+      .eq("id", invite.id);
 
-      await prismaTx.invitation.update({
-        where: { id: invite.id },
-        data: { accepted: true },
-      });
-      return newUser;
-    });
-
-    return result;
+    return newUser;
   },
 
-  revokeInvitation: async ({ invitationId, requesterId }) => {
-    // you should check ownership in controller (only project admin or workspace creator)
+  revokeInvitation: async ({ invitationId }) => {
+    const { data: inv, error } = await supabase
+      .from("invitations")
+      .select("*")
+      .eq("id", Number(invitationId))
+      .single();
+    if (error || !inv) throw new Error("Invitation not found");
 
-    const inv = await prisma.invitation.findUnique({
-      where: { id: Number(invitationId) },
-    });
-    if (!inv) throw new Error("Invitation not found");
-
-    await prisma.invitation.delete({ where: { id: Number(invitationId) } });
+    await supabase
+      .from("invitations")
+      .delete()
+      .eq("id", Number(invitationId));
     return;
   },
 };

@@ -1,7 +1,5 @@
-// src/services/membershipService.js
-import { PrismaClient } from "@prisma/client";
+import { supabase } from "../config/supabase.js";
 
-const prisma = new PrismaClient();
 /**
  * membershipService:
  * - addMemberByEmail
@@ -16,24 +14,31 @@ export const membershipService = {
    * Throws if user doesn't exist, or membership already exists.
    */
   addMemberByEmail: async ({ projectId, email, role = "MEMBER" }) => {
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) throw new Error("User with that email not found");
+    // Find user by email
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email)
+      .single();
+    if (userError || !user) throw new Error("User with that email not found");
 
-    // ensure membership not already exist
-    const existing = await prisma.membership.findFirst({
-      where: { projectId: Number(projectId), userId: user.id },
-    }); 
-    
+    // Check if membership already exists
+    const { data: existing, error: existError } = await supabase
+      .from("memberships")
+      .select("*")
+      .eq("projectId", Number(projectId))
+      .eq("userId", user.id)
+      .single();
     if (existing) throw new Error("User is already a member of this project");
-    
-    const membership = await prisma.membership.create({
-      data: {
-        projectId: Number(projectId),
-        userId: user.id,
-        role,
-      },
-    });
-    
+
+    // Create membership
+    const { data: membership, error: memError } = await supabase
+      .from("memberships")
+      .insert([{ projectId: Number(projectId), userId: user.id, role }])
+      .select()
+      .single();
+    if (memError) throw new Error(memError.message);
+
     return { membership, user };
   },
 
@@ -41,20 +46,17 @@ export const membershipService = {
    * List members for a project: returns array of { userId, name, email, role, membershipId, createdAt }
    */
   listMembers: async ({ projectId }) => {
-    const members = await prisma.membership.findMany({
-      where: { projectId: Number(projectId) },
-      include: {
-        user: {
-          select: { id: true, name: true, email: true },
-        },
-      },
-    });
+    const { data: memberships, error } = await supabase
+      .from("memberships")
+      .select("*, user(id, name, email)")
+      .eq("projectId", Number(projectId));
+    if (error) throw new Error(error.message);
 
-    return members.map((m) => ({
+    return memberships.map((m) => ({
       membershipId: m.id,
-      userId: m.user.id,
-      name: m.user.name,
-      email: m.user.email,
+      userId: m.user?.id,
+      name: m.user?.name,
+      email: m.user?.email,
       role: m.role,
       createdAt: m.createdAt,
     }));
@@ -64,16 +66,23 @@ export const membershipService = {
    * Update a membership's role (e.g., MEMBER -> ADMIN).
    */
   updateMemberRole: async ({ projectId, membershipId, role }) => {
-    // ensure membership belongs to project
-    const membership = await prisma.membership.findUnique({ where: { id: Number(membershipId) } });
-    if (!membership || membership.projectId !== Number(projectId)) {
+    // Ensure membership belongs to project
+    const { data: membership, error: memError } = await supabase
+      .from("memberships")
+      .select("*")
+      .eq("id", Number(membershipId))
+      .single();
+    if (memError || !membership || membership.projectId !== Number(projectId)) {
       throw new Error("Membership not found for this project");
     }
 
-    const updated = await prisma.membership.update({
-      where: { id: Number(membershipId) },
-      data: { role },
-    });
+    const { data: updated, error: updError } = await supabase
+      .from("memberships")
+      .update({ role })
+      .eq("id", Number(membershipId))
+      .select()
+      .single();
+    if (updError) throw new Error(updError.message);
 
     return updated;
   },
@@ -82,12 +91,22 @@ export const membershipService = {
    * Remove member from project by membership id
    */
   removeMember: async ({ projectId, membershipId }) => {
-    const membership = await prisma.membership.findUnique({ where: { id: Number(membershipId) } });
-    if (!membership || membership.projectId !== Number(projectId)) {
+    // Ensure membership belongs to project
+    const { data: membership, error: memError } = await supabase
+      .from("memberships")
+      .select("*")
+      .eq("id", Number(membershipId))
+      .single();
+    if (memError || !membership || membership.projectId !== Number(projectId)) {
       throw new Error("Membership not found for this project");
     }
 
-    await prisma.membership.delete({ where: { id: Number(membershipId) } });
+    const { error: delError } = await supabase
+      .from("memberships")
+      .delete()
+      .eq("id", Number(membershipId));
+    if (delError) throw new Error(delError.message);
+
     return;
   },
 };
