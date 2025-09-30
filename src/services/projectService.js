@@ -58,15 +58,17 @@ export const projectService = {
     return projects;
   },
 
-  getProjectById: async (projectId) => {
-    const { data: project, error } = await supabase
-      .from("projects")
-      .select("*, workspace(*), memberships(*)")
-      .eq("id", projectId)
-      .single();
-    if (error) throw new Error(error.message);
-    return project;
-  },
+  getProjectById: async (id) => {
+  const { data: project, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  return project;
+},
 
   updateProject: async ({ projectId, data }) => {
     const { data: updated, error } = await supabase

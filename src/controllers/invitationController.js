@@ -19,10 +19,10 @@ export const invitationController = {
       const projectId = Number(req.params.projectId);
       const { email, role } = value;
       const requesterId = req.user.userId;
-
+      console.log(projectId,requesterId);
       const project = await projectService.getProjectById(projectId);
       if (!project) return res.status(404).json({ error: "Project not found" });
-
+      console.log(project,"sadfgdfsfaSDSAasdswqwds");
       // check permissions: workspace creator or project admin
       const workspace = await workspaceService.getWorkspaceById(project.workspaceId);
       const isWorkspaceCreator = workspace && workspace.creatorId === Number(requesterId);
